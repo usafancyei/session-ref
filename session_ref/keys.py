@@ -48,7 +48,9 @@ def reported_key(seq):
 
 class Keys:
     def __init__(self, trigger):
-        self.trigger = trigger
+        self.trigger_key = trigger[-1:]
+        self.requires_space = trigger.startswith(b" ")
+        self.after_space = False
         self.pending = b""
         self.pasting = False
         self.keep_markers = False
@@ -74,6 +76,17 @@ class Keys:
         chunks.append(combined[offset:])
         self.output_tail = combined[-64:]
         return b"".join(chunks)
+
+    def key_event(self, token, code):
+        if self.after_space and token.startswith(b"\x1b["):
+            report = CSI_U.fullmatch(token)
+            # Releases and standalone modifiers (e.g. Shift for '#') leave
+            # the preceding text keystroke unchanged.
+            if report and (report[4] == b"3" or 57441 <= int(report[1]) <= 57454):
+                return token
+        activate = code == self.trigger_key[0] and (self.after_space or not self.requires_space)
+        self.after_space = code == 32
+        return None if activate else token
 
     def feed(self, data):
         data = self.pending + data
@@ -132,7 +145,8 @@ class Keys:
                         if self.keep_markers:
                             yield token
                     else:
-                        yield None if reported_key(token) == self.trigger[0] else token
+                        yield self.key_event(token, reported_key(token))
+                        continue
                 elif data[pos:pos + 2] == b"\x1bO":
                     if len(data) == pos + 2:
                         self.pending = data[pos:]
@@ -150,17 +164,20 @@ class Keys:
                 else:
                     yield data[pos:pos + 2]
                     pos += 2
+                self.after_space = False
             else:
                 escape = data.find(b"\x1b", pos)
                 stop = len(data) if escape < 0 else escape
-                for i, piece in enumerate(data[pos:stop].split(self.trigger)):
+                for i, piece in enumerate(data[pos:stop].split(self.trigger_key)):
                     if i:
-                        yield None
+                        yield self.key_event(self.trigger_key, self.trigger_key[0])
                     if piece:
+                        self.after_space = piece.endswith(b" ")
                         yield piece
                 pos = stop
 
     def flush_escape(self):
+        self.after_space = False
         data, self.pending = self.pending, b""
         self.in_control_string = False
         return data

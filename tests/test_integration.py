@@ -130,7 +130,7 @@ class IntegrationTests(unittest.TestCase):
                     break
                 data.extend(piece)
                 if b"READY" in data and not opened:
-                    os.write(master, "前后".encode() + b"\x1b[D#")
+                    os.write(master, "前后".encode() + b"\x1b[D# #")
                     opened = True
                 if "4 个会话".encode() in data and not selected:
                     if cancel:
@@ -143,10 +143,10 @@ class IntegrationTests(unittest.TestCase):
                         os.write(master, toggle + selection.encode() + b"-ref\r@\x04")
                     selected = True
                 if cancel and selected and not continued and data.count(b"READY") == 2:
-                    os.write(master, b"@\x1b[200~#paste\x1b[201~\x04")
+                    os.write(master, b"@\x1b[200~ #paste\x1b[201~\x04")
                     continued = True
-            expected = "前后".encode() + b"\x1b[D"
-            expected += b"#" + after_escape + b"@#paste" if cancel else selection.encode() + b"-ref@"
+            expected = "前后".encode() + b"\x1b[D# "
+            expected += b"#" + after_escape + b"@ #paste" if cancel else selection.encode() + b"-ref@"
             self.assertIn(b"GOT:" + expected.hex().encode() + b":END", data)
             if source == "codex":
                 self.assertEqual(data.count(b"READY"), 2)

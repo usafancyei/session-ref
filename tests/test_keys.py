@@ -4,6 +4,32 @@ from session_ref.keys import DISABLE, ENABLE, END, START, Keys
 
 
 class KeysTests(unittest.TestCase):
+    def test_space_then_hash_across_reads(self):
+        space = b"\x1b[32u"
+        release = b"\x1b[32;1:3u"
+        shift = b"\x1b[57441;2u"
+        hash_key = b"\x1b[51:35;2u"
+        for prefix in (b" ", space, space + release + shift):
+            for key in (b"#", hash_key):
+                data = key + b"word#" + prefix + key + key
+                for cut in range(len(data) + 1):
+                    keys = Keys(b" #")
+                    events = [*keys.feed(data[:cut]), *keys.feed(data[cut:])]
+                    actual = b"".join(b"<pick>" if e is None else e for e in events)
+                    self.assertEqual(actual, key + b"word#" + prefix + b"<pick>" + key)
+
+    def test_space_is_immediate_and_edits_and_paste_break_the_sequence(self):
+        for interrupt in (b"\x7f", b"\r", b"\t", b"x", b"\x1b[D", b"\x1bOA",
+                          START + b" #" + END, START + b" " + END, START + END):
+            keys = Keys(b" #")
+            keys.child_paste = True
+            self.assertEqual(list(keys.feed(b" ")), [b" "])
+            self.assertEqual(b"".join(keys.feed(interrupt + b"#")), interrupt + b"#")
+        keys = Keys(b" #")
+        list(keys.feed(b" \x1b"))
+        self.assertEqual(keys.flush_escape(), b"\x1b")
+        self.assertEqual(list(keys.feed(b"#")), [b"#"])
+
     def test_trigger_and_all_chunk_boundaries_in_paste(self):
         payload = "中文#@@".encode()
         for brackets in (False, True):

@@ -92,9 +92,10 @@ def launch(source, args):
     argv = [executable, *args]
     if not all(os.isatty(i) for i in (0, 1, 2)) or not interactive(source, args):
         os.execv(executable, argv)
-    trigger = os.environ.get("SESSION_REF_TRIGGER", "#")
-    if len(trigger) != 1 or not 33 <= ord(trigger) <= 126:
-        print("session-ref: SESSION_REF_TRIGGER 需要一个可见 ASCII 字符", file=sys.stderr)
+    trigger = os.environ.get("SESSION_REF_TRIGGER", " #")
+    key = trigger.removeprefix(" ")
+    if len(key) != 1 or not 33 <= ord(key) <= 126:
+        print("session-ref: SESSION_REF_TRIGGER 需要一个可见 ASCII 字符，前面可加一个半角空格", file=sys.stderr)
         return 2
     directory = launch_directory(source, args)
     return run_pty(argv, trigger.encode(), lambda: Picker(ROOT / "session-ref", directory))

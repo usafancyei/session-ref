@@ -40,7 +40,6 @@ def end_child(pid, sig):
 class Terminal:
     def __init__(self, master, trigger, open_picker):
         self.master = master
-        self.trigger = trigger
         self.open_picker = open_picker
         self.keys = Keys(trigger)
         self.screen = Screen()
@@ -74,19 +73,19 @@ class Terminal:
         if self.picker:
             if self.keys.in_control_string:
                 return
-            result = self.picker.input(self.trigger if token is None else token)
+            result = self.picker.input(self.keys.trigger_key if token is None else token)
             self.dirty = True
             if result is not None:
                 selected, tail = result
                 self.dismiss()
-                write_all(self.master, (selected or self.trigger) + tail)
+                write_all(self.master, (selected or self.keys.trigger_key) + tail)
         elif token is not None:
             write_all(self.master, token)
         else:
             try:
                 self.picker = self.open_picker()
             except OSError:
-                write_all(self.master, self.trigger)
+                write_all(self.master, self.keys.trigger_key)
                 return
             self.keys.selecting = True
             if self.screen.alternate:
