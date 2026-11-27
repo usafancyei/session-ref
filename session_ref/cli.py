@@ -98,7 +98,8 @@ def launch(source, args):
         print("session-ref: SESSION_REF_TRIGGER 需要一个可见 ASCII 字符，前面可加一个半角空格", file=sys.stderr)
         return 2
     directory = launch_directory(source, args)
-    return run_pty(argv, trigger.encode(), lambda: Picker(ROOT / "session-ref", directory))
+    return run_pty(argv, trigger.encode(), lambda: Picker(ROOT / "session-ref", directory),
+                   source=source, directory=directory)
 
 
 def listing(sources, stream, summary, by_project=False):

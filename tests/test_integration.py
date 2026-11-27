@@ -1,6 +1,7 @@
 """Exercise the real terminal selector through the normal zsh entry points."""
 
 import concurrent.futures
+import errno
 import json
 import os
 import pty
@@ -55,6 +56,46 @@ SDK = '''from types import SimpleNamespace
 def list_sessions():
     return [SimpleNamespace(session_id="claude-ref", custom_title="Claude title",
                             summary="", cwd="/demo", last_modified=1000)]
+'''
+
+SWITCH_CLI = r'''#!/usr/bin/env python3
+import os, select, sys, tty
+from pathlib import Path
+name = Path(sys.argv[0]).name
+root = Path(os.environ["SWITCH_FIXTURE"])
+state = root / (name + ".launches")
+with state.open("a") as log:
+    print(os.getpid(), os.getcwd(), *sys.argv[1:], file=log)
+tty.setraw(0)
+if name == "codex":
+    os.write(1, b"\x1b[?1049h\x1b[>1u")
+os.write(1, f"<ready-{name}>".encode())
+draft = bytearray()
+probes = 0
+while True:
+    if name == "codex" and (root / "go").exists() and not (root / "done").exists():
+        for _ in range(320):
+            data = memoryview(b"x" * 4095 + b"\n")
+            while data:
+                data = data[os.write(1, data):]
+        os.write(1, b"<background-done>")
+        (root / "done").touch()
+    if not select.select([0], [], [], 0.02)[0]:
+        continue
+    key = os.read(0, 1)
+    if key == b"\x04":
+        break
+    if key == b"\x02":
+        probes += 1
+        os.write(1, f"<{name}-{probes}:{draft.hex()}>".encode())
+    else:
+        draft.extend(key)
+        if key == b" ":
+            os.write(1, b"<space-received>")
+if name == "codex":
+    os.write(1, b"\x1b[<u\x1b[?1049l")
+os.write(1, f"<ended-{name}>".encode())
+sys.exit(23)
 '''
 
 
@@ -176,3 +217,98 @@ class IntegrationTests(unittest.TestCase):
 
     def test_picker_recovers_on_control_string_idle_timeout(self):
         self.session("claude", "agy", idle_control=True)
+
+    def switch_session(self, command):
+        master, slave = pty.openpty()
+        termios.tcsetwinsize(slave, (24, 80))
+        proc = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
+                                env=self.env, start_new_session=True)
+        os.close(slave)
+        captured = bytearray()
+
+        def expect(marker):
+            deadline = time.monotonic() + 8
+            while marker not in captured:
+                if time.monotonic() >= deadline:
+                    self.fail(f"missing {marker!r}, last output {captured[-160:]!r}")
+                if select.select([master], [], [], 0.1)[0]:
+                    chunk = os.read(master, 65536)
+                    self.assertTrue(chunk, "unexpected end of terminal")
+                    captured.extend(chunk)
+            end = captured.index(marker) + len(marker)
+            result = bytes(captured[:end])
+            del captured[:end]
+            return result
+
+        probes = dict.fromkeys(SOURCES, 0)
+
+        def draft(name, expected):
+            probes[name] += 1
+            os.write(master, b"\x02")
+            return expect(f"<{name}-{probes[name]}:{expected.hex()}>".encode())
+
+        try:
+            expect(b"<ready-codex>")
+            original = "中文草稿 ".encode()
+            os.write(master, original)
+            expect(b"<space-received>")
+            os.write(master, b"\\cl")
+            expect(b"\\cl")
+            os.write(master, b"aude\r")
+            expect(b"<ready-claude>")
+            (self.path / "go").touch()
+            until = time.monotonic() + 5
+            while not (self.path / "done").exists() and time.monotonic() < until:
+                time.sleep(0.02)
+            self.assertTrue((self.path / "done").exists(), "hidden writer stalled")
+            os.write(master, b"A \\cod")
+            expect(b"\\cod")
+            os.write(master, b"\x1b[O\x1b[<64;1;2M\x1bOA\x15cod\x1b\r")
+            draft("claude", b"A")
+            paste = b" \\codex\r"
+            os.write(master, b"\x1b[200~" + paste + b"\x1b[201~")
+            output = draft("claude", b"A" + paste)
+            self.assertNotIn(b"<background-done>", output)
+            os.write(master, b" \\agy\r")
+            expect(b"<ready-agy>")
+            os.write(master, b"B \\codex\r")
+            expect(b"<background-done>")
+            draft("codex", original)
+            os.write(master, b" \\claude\r")
+            draft("claude", b"A" + paste)
+            os.write(master, b"\x04")
+            expect(b"<background-done>")
+            draft("codex", original)
+            os.write(master, b"\x04")
+            expect(b"<ready-agy>")
+            draft("agy", b"B")
+            os.write(master, b"\x04")
+            expect(b"<ended-agy>")
+            # OpenSSH drains the local tty before restoring its attributes.
+            deadline = time.monotonic() + 5
+            while proc.poll() is None and time.monotonic() < deadline:
+                if select.select([master], [], [], 0.1)[0]:
+                    try:
+                        if not os.read(master, 65536):
+                            break
+                    except OSError as exc:
+                        if exc.errno != errno.EIO:
+                            raise
+                        break
+            self.assertEqual(proc.wait(timeout=1), 23)
+        finally:
+            os.close(master)
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
+
+    def test_switching_keeps_live_processes_drafts_and_background_progress(self):
+        for source in SOURCES:
+            (self.path / source).write_text(SWITCH_CLI)
+        self.env["SWITCH_FIXTURE"] = str(self.path)
+        self.switch_session(self.command("codex", "-C", str(self.path)))
+        for source in SOURCES:
+            records = (self.path / (source + ".launches")).read_text().splitlines()
+            self.assertEqual(len(records), 1)
+            if source != "codex":
+                self.assertEqual(records[0].split(" ", 1)[1], os.path.realpath(self.path))

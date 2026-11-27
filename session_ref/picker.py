@@ -10,8 +10,74 @@ import sys
 import threading
 
 from .catalog import SAFE_ID, SOURCES, clean, project_root, recent_sessions
-from .keys import END, START, navigation_key, reported_key
-from .view import LABEL, render_picker
+from .keys import END, START, key_transition, navigation_key, reported_key
+from .view import LABEL, clip, render_picker
+
+
+class SwitchCommand:
+    eof = True
+
+    def __init__(self, prefix):
+        self.prefix = prefix
+        self.letters = []
+        self.name = ""
+        self.error = ""
+
+    @property
+    def raw(self):
+        return self.prefix + b"".join(self.letters)
+
+    def input(self, token):
+        """Return a target name on Enter, or literal bytes when leaving the prompt."""
+        if key_transition(token):
+            return None
+        code = reported_key(token)
+        if code is None and len(token) == 1:
+            code = token[0]
+        if code in (27, 3):
+            return b""
+        if token.startswith(b"\x1b") and code is None:
+            if len(token) == 2 and (token[1] < 32 or token[1] == 127):
+                return b""
+            if len(token) == 2 and token[1] >= 128:
+                # The tokenizer may pair Escape with the first byte of UTF-8.
+                return token[1:]
+            return None
+        if code in (10, 13):
+            if self.name in SOURCES:
+                return self.name
+            self.error = "请输入完整名称，或按 Esc 取消"
+            return None
+        self.error = ""
+        if code == 21:
+            self.name = ""
+            self.letters.clear()
+            return None
+        if code in (8, 127):
+            if not self.name:
+                return b""
+            self.name = self.name[:-1]
+            self.letters.pop()
+            return None
+        if code is not None and (code < 32 or 127 <= code <= 159 or 57344 <= code <= 63743):
+            return None
+        text = chr(code) if code is not None else token.decode("ascii", errors="replace")
+        name = self.name + text
+        if not any(source.startswith(name) for source in SOURCES):
+            return self.raw + token
+        self.name = name
+        # Keep the original encoding of each editable ASCII letter (plain or CSI-u).
+        self.letters.extend([token] if code is not None else [bytes([ch]) for ch in token])
+        return None
+
+    def render(self, size):
+        rows, cols = size
+        lines = ["切换 CLI    codex / claude / agy", "\\" + self.name,
+                 self.error or "Enter 切换    Esc 取消"]
+        return b"\x1b[H\x1b[J" + "\r\n".join(clip(line, cols) for line in lines[:rows]).encode()
+
+    def close(self):
+        pass
 
 
 class Picker:

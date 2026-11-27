@@ -1,9 +1,30 @@
 import unittest
 
-from session_ref.keys import DISABLE, ENABLE, END, START, Keys
+from session_ref.keys import DISABLE, ENABLE, END, START, Keys, SwitchPrefix
 
 
 class KeysTests(unittest.TestCase):
+    def test_switch_prefix_and_paste_at_every_read_boundary(self):
+        for space in (b" ", b"\x1b[32u\x1b[32;1:3u"):
+            for slash in (b"\\", b"\x1b[92u"):
+                prefix = space + slash
+                paste = START + b" \\agy\r #x" + END
+                data = b"a" + prefix + b"claude" + paste + b" #"
+                for cut in range(len(data) + 1):
+                    keys = Keys(b" #", switching=True)
+                    keys.child_paste = True
+                    events = [*keys.feed(data[:cut]), *keys.feed(data[cut:])]
+                    self.assertEqual(events.count(SwitchPrefix(prefix)), 1)
+                    raw = b"".join(b"<switch>" if isinstance(e, SwitchPrefix) else
+                                   b"<pick>" if e is None else e for e in events)
+                    self.assertEqual(raw, b"a<switch>claude" + paste + b" <pick>")
+
+    def test_explicit_backslash_picker_keeps_its_shortcut(self):
+        keys = Keys(b" \\", switching=True)
+        self.assertEqual(list(keys.feed(b" \\")), [b" ", None])
+        keys = Keys(b"\\", switching=True)
+        self.assertEqual(list(keys.feed(b"\\ \\")), [None, SwitchPrefix(b" \\")])
+
     def test_space_then_hash_across_reads(self):
         space = b"\x1b[32u"
         release = b"\x1b[32;1:3u"
