@@ -1,9 +1,47 @@
 import unittest
 
-from session_ref.keys import DISABLE, ENABLE, END, START, Keys, SwitchPrefix
+from session_ref.keys import DISABLE, ENABLE, END, PREVIOUS_CLI, START, Keys, SwitchPrefix
 
 
 class KeysTests(unittest.TestCase):
+    def test_ctrl_backslash_at_every_read_boundary(self):
+        for trigger in (b" #", b" \\"):
+            for key in (b"\x1c", b"\x1b[27;5;92~", b"\x1b[92;5u",
+                        b"\x1b[35::92;5u\x1b[35::92;5:2u\x1b[35::92;5:3u",
+                        b"\x1b[92:124;197:1u\x1b[92;197:2u\x1b[92;197:3u"):
+                data = b"a " + key + b"#"
+                for cut in range(len(data) + 1):
+                    keys = Keys(trigger, switching=True)
+                    events = [*keys.feed(data[:cut]), *keys.feed(data[cut:])]
+                    self.assertEqual(events, [b"a", b" ", PREVIOUS_CLI, b"#"])
+
+    def test_ctrl_backslash_is_literal_in_payloads_and_outside_workspace_input(self):
+        shortcut = b"\x1c\x1b[92;5u"
+        keys = Keys(b" #", switching=True)
+        self.assertEqual(b"".join(keys.feed(START + shortcut + END)), shortcut)
+        reply = b"\x1b]label\x1c\x07"
+        self.assertEqual(b"".join(keys.feed(reply)), reply)
+        others = b"\\\x1b[92u\x1b[92;3u\x1b[92;6u\x1b[35:92;5u\x1b[35::92;6u"
+        self.assertEqual(b"".join(keys.feed(others)), others)
+        keys.selecting = True
+        self.assertEqual(b"".join(keys.feed(shortcut)), shortcut)
+        self.assertEqual(b"".join(Keys(b" #").feed(shortcut)), shortcut)
+
+    def test_only_deliberate_input_interrupts_a_cycle(self):
+        reports = (b"\x1b[I\x1b[O\x1b[<64;1;2M\x1b[Mabc\x1b[24;80R\x1b[0n\x1b[?1u"
+                   b"\x1b[?1;2c\x1b[?2004;1$y\x1b]11;color\x1b\\\x1bPanswer\x1b\\"
+                   b"\x1b[97;1:3u\x1b[57442;5u\x1b[1;5:3A")
+        for cut in range(len(reports) + 1):
+            keys = Keys(b"#", switching=True)
+            for chunk in (reports[:cut], reports[cut:]):
+                for token in keys.feed(chunk):
+                    self.assertFalse(keys.is_user_input(token), token)
+        for data in (b"x", b"\x02", b"\x1b[A", b"\x1bOA", b"\x1b[3~", b"\x1b[1;5:1A",
+                     b"\x1b[97;1;97:769u", START + b"\x1b[?1u" + END, b"#", b" \\",
+                     b"\x1b[32u\x1b[32;1:3u\x1b]reply\x07"):
+            keys = Keys(b"#", switching=True)
+            self.assertTrue(any(keys.is_user_input(token) for token in keys.feed(data)), data)
+
     def test_switch_prefix_and_paste_at_every_read_boundary(self):
         for space in (b" ", b"\x1b[32u\x1b[32;1:3u"):
             for slash in (b"\\", b"\x1b[92u"):

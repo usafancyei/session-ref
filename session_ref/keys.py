@@ -13,8 +13,11 @@ DISABLE = b"\x1b[?2004l"
 CSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
 SS3 = re.compile(rb"\x1bO[0-?]*[ -/]*[@-~]")
 SPACE_GRACE = 0.15
-CSI_U = re.compile(rb"\x1b\[(\d+)(?::(\d*))?(?::\d*)?(?:;(\d+)(?::(\d+))?)?(?:;(\d+))?u")
+CSI_U = re.compile(rb"\x1b\[(?P<key>\d+)(?::(?P<shifted>\d*))?(?::(?P<base>\d*))?"
+                   rb"(?:;(?P<mods>\d+)(?::(?P<event>\d+))?)?(?:;(?P<text>\d+(?::\d+)*))?u")
+CSI_KEY = re.compile(rb"\x1b\[[\d;]*(?::([123]))?[A-FHPQSZ~]")
 NAVIGATION = re.compile(rb"\x1b\[(1|5|6);(\d+)(?::([123]))?([AB~])")
+PREVIOUS_CLI = object()
 
 
 def modifiers(value):
@@ -38,13 +41,13 @@ def reported_key(seq):
     match = CSI_U.fullmatch(seq)
     if not match:
         return None
-    key, shifted, mods, event, text = match.groups()
+    key, shifted, _, mods, event, text = match.groups()
     if event not in (None, b"1", b"2"):
         return None
     flags = modifiers(mods)
     if flags == 4 and key in (b"99", b"117"):
         return int(key) - 96
-    if flags not in (0, 1):
+    if flags not in (0, 1) or (text and b":" in text):
         return None
     code = int(text or (shifted if flags == 1 else None) or key)
     return code if code <= 0x10ffff and not 0xd800 <= code <= 0xdfff else None
@@ -52,7 +55,17 @@ def reported_key(seq):
 
 def key_transition(token):
     report = CSI_U.fullmatch(token)
-    return report and (report[4] == b"3" or 57441 <= int(report[1]) <= 57454)
+    return report and (report["event"] == b"3" or 57441 <= int(report["key"]) <= 57454)
+
+
+def ctrl_backslash_event(token):
+    """Return the press, repeat or release event for Ctrl+backslash."""
+    if token in (b"\x1c", b"\x1b[27;5;92~"):  # legacy byte or xterm modifyOtherKeys
+        return b"1"
+    report = CSI_U.fullmatch(token)
+    if report and b"92" in (report["key"], report["base"]) and modifiers(report["mods"]) == 4:
+        return report["event"] or b"1"
+    return None
 
 
 @dataclass(frozen=True)
@@ -64,7 +77,8 @@ class Keys:
     def __init__(self, trigger, switching=False):
         self.trigger_key = trigger[-1:]
         self.requires_space = trigger.startswith(b" ")
-        self.switching = switching and trigger != b" \\"
+        self.switching = switching
+        self.switch_prefix = switching and trigger != b" \\"
         self.space = b""
         self.space_deadline = 0.0
         self.special = re.compile(rb"[\x00-\x20\x7f" + re.escape(self.trigger_key + b"\\") + b"]")
@@ -105,6 +119,14 @@ class Keys:
 
     def stroke(self, token, code):
         if self.switching and not self.selecting:
+            event = ctrl_backslash_event(token)
+            if event is not None:
+                if event == b"1":
+                    yield from self.literal_space()
+                    self.after_space = False
+                    yield PREVIOUS_CLI
+                return
+        if self.switch_prefix and not self.selecting:
             if self.after_space and code == ord("\\"):
                 prefix, self.space = self.space + token, b""
                 self.after_space = False
@@ -127,6 +149,23 @@ class Keys:
         if self.space:
             space, self.space = self.space, b""
             yield space
+
+    def is_user_input(self, token):
+        """True for an edit, keypress or picker request that ends a shortcut cycle."""
+        if token is PREVIOUS_CLI or self.in_control_string:
+            return False
+        if not isinstance(token, bytes):  # picker request or switch prefix
+            return True
+        if self.pasting or not token.startswith(b"\x1b["):
+            return bool(token)
+        # A buffered space can include subsequent modifier/release reports.
+        report = CSI_U.match(token)
+        if report:
+            return not key_transition(report[0])
+        # Recognize CSI keypresses explicitly. Other CSI includes focus, mouse
+        # and terminal replies such as cursor position and keyboard mode.
+        key = CSI_KEY.fullmatch(token)
+        return key is not None and key[1] != b"3"
 
     def feed(self, data):
         data = self.pending + data
@@ -201,8 +240,8 @@ class Keys:
                     yield data[pos:end]
                     pos = end
                 elif data[pos:pos + 2] in (b"\x1b]", b"\x1bP", b"\x1b_", b"\x1b^", b"\x1bX"):
-                    self.in_control_string = True
                     yield from self.literal_space()
+                    self.in_control_string = True
                     yield data[pos:pos + 2]
                     pos += 2
                 elif (data[pos:] == b"\x1b" or re.fullmatch(

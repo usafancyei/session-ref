@@ -34,6 +34,27 @@ class ImmediatePicker:
 
 
 class TerminalTests(unittest.TestCase):
+    def test_cycle_skips_background_eof_and_stays_inside_open_pickers(self):
+        for opener in (b"#", b" \\"):
+            with patch("session_ref.terminal.termios.tcgetwinsize", return_value=(24, 80)), \
+                 patch("session_ref.terminal.termios.tcsetwinsize"), patch("session_ref.terminal.write_all"), \
+                 patch("session_ref.terminal.spawn", return_value=Child(1, 7, Screen())):
+                picker = Mock()
+                picker.input.return_value = None
+                w = Workspace("agy", [], None, None, b"#", lambda: picker)
+                w.switch()
+                self.assertFalse(w.cycle_order)
+                codex = Child(2, 8, Screen())
+                w.children = {"codex": codex, "claude": Child(3, 9, Screen(), eof=True), "agy": w.active}
+                w.switch()
+                self.assertIs(w.active, codex)
+                for token in w.terminal.keys.feed(opener + b"\x1c\x1b[35::92;5u"):
+                    w.input(token)
+                self.assertIsNotNone(w.terminal.picker)
+                self.assertFalse(w.cycle_order)
+                self.assertIs(w.active, codex)
+                self.assertFalse(codex.input_queue)
+
     def test_switch_controls_never_reach_the_original_draft(self):
         prefix = b" \\"
         events = (b"\x1b[I\x1b[O\x1b[<64;9;1M\x1b[Mabc\x1b[A\x1bOB\x1b[1;5D"

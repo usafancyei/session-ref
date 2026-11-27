@@ -10,7 +10,7 @@ import time
 import tty
 from dataclasses import dataclass, field
 
-from .keys import DISABLE, ENABLE, START, Keys, SwitchPrefix, key_transition, reported_key
+from .keys import DISABLE, ENABLE, PREVIOUS_CLI, START, Keys, SwitchPrefix, key_transition, reported_key
 from .picker import SwitchCommand
 from .screen import RESET_FRAME, STRING_END, Screen
 
@@ -94,7 +94,9 @@ class Terminal:
             if fast and isinstance(token, bytes) and (token in (b"\r", b"\n") or reported_key(token) in (10, 13)):
                 return
             self.cancel_until = 0.0
-        if isinstance(token, SwitchPrefix):
+        if token is PREVIOUS_CLI:
+            self.switch()
+        elif isinstance(token, SwitchPrefix):
             self.show(SwitchCommand(token.raw))
         elif isinstance(self.picker, SwitchCommand):
             command = self.picker
@@ -255,12 +257,26 @@ class Workspace:
         self.active = spawn(argv, original, termios.tcgetwinsize(0))
         # Insertion order is the activation order, used when a CLI exits.
         self.children = {source: self.active}
+        self.cycle_order = ()
         self.terminal = Terminal(self.active.master, trigger, open_picker,
                                  self.switch if source else None,
                                  lambda data: self.active.input_queue.extend(data))
         self.terminal.screen = self.active.screen
 
-    def switch(self, source):
+    def switch(self, source=None):
+        if source is None:
+            if len(self.children) < 2:
+                return
+            # Freeze the order across presses while tracking real activations for exit fallback.
+            if not self.cycle_order:
+                self.cycle_order = tuple(self.children)
+            order = [name for name in self.cycle_order if not self.children[name].eof]
+            if len(order) < 2:
+                return
+            current = next(reversed(self.children))
+            source = order[order.index(current) - 1]
+        else:
+            self.cycle_order = ()
         child = self.children.get(source)
         if child is self.active:
             self.terminal.dismiss()
@@ -321,6 +337,7 @@ class Workspace:
                     break
                 self.read(child)
             del self.children[source]
+            self.cycle_order = ()
             os.close(child.master)
             if not self.children:
                 return status
@@ -336,6 +353,11 @@ class Workspace:
                 if previous != self.terminal.size:
                     child.screen.complete = False
                 self.park(child)
+
+    def input(self, token):
+        if self.cycle_order and self.terminal.keys.is_user_input(token):
+            self.cycle_order = ()
+        self.terminal.input(token)
 
     def run(self, resize_read):
         terminal = self.terminal
@@ -363,13 +385,15 @@ class Workspace:
                 remaining = keys.space_deadline - time.monotonic()
                 if remaining <= 0:
                     for token in keys.literal_space():
-                        terminal.input(token)
+                        self.input(token)
                     continue
                 timeout = min(timeout, remaining)
             if (keys.pending or keys.in_control_string) and not keys.pasting:
                 timeout = min(timeout, max(0, deadline - time.monotonic()))
                 if timeout == 0:
-                    terminal.input(keys.flush_escape())
+                    # A timed-out OSC/DCS fragment still belongs to the terminal.
+                    dispatch = terminal.input if keys.in_control_string else self.input
+                    dispatch(keys.flush_escape())
                     continue
             ready, writers, _ = select.select(watching, writable, [], timeout)
             if resize_read in ready:
@@ -388,7 +412,7 @@ class Workspace:
                     raise Disconnected(signal.SIGHUP)
                 for token in keys.feed(data):
                     if not self.active.eof:
-                        terminal.input(token)
+                        self.input(token)
                 deadline = time.monotonic() + (0.25 if keys.in_control_string and not keys.pending else 0.08)
 
     def close(self, sig):

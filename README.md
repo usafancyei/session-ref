@@ -47,6 +47,10 @@ ssh -t user@mac '~/codexProject/session-ref/session-ref run codex'
 
 ## 在同一窗口切换 CLI
 
+在 Mac 本机终端，或从 Windows、macOS 通过 SSH 登录 Mac 时，直接按 `Ctrl+\`（Control 加反斜杠）即可回到本窗口上一个使用的 CLI。依次打开 Codex、Claude、agy 后，从 agy 连按三次会经过 Claude、Codex，再回到 agy。如果切到 Claude 后输入或粘贴草稿，下一次按就回到刚离开的 agy。打开选择器或按名称切换也会重新计算顺序。只有一个端时会停在原处。
+
+如果在 Windows 的 VS Code 集成终端里按 `Ctrl+\` 打开了拆分编辑器，可在 `terminal.integrated.commandsToSkipShell` 列表中加入 `"-workbench.action.splitEditor"`，让终端接收这个键。[VS Code 终端快捷键设置](https://code.visualstudio.com/docs/terminal/advanced#_keyboard-shortcuts-and-the-shell)
+
 从接入了 `session-ref` 的 zsh 启动任意一个 CLI。手打一个半角空格，再按反斜杠 `\`，输入目标名称后按 Enter。三个命令在 Codex、Claude 和 agy 中都可以使用。
 
 | 手打内容（前面加一个半角空格） | Enter 后显示 |
