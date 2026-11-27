@@ -3,6 +3,7 @@
 import re
 import time
 from dataclasses import dataclass
+from enum import Enum
 
 from .screen import MODES
 
@@ -17,7 +18,14 @@ CSI_U = re.compile(rb"\x1b\[(?P<key>\d+)(?::(?P<shifted>\d*))?(?::(?P<base>\d*))
                    rb"(?:;(?P<mods>\d+)(?::(?P<event>\d+))?)?(?:;(?P<text>\d+(?::\d+)*))?u")
 CSI_KEY = re.compile(rb"\x1b\[[\d;]*(?::([123]))?[A-FHPQSZ~]")
 NAVIGATION = re.compile(rb"\x1b\[(1|5|6);(\d+)(?::([123]))?([AB~])")
-PREVIOUS_CLI = object()
+
+
+class CycleDirection(Enum):
+    PREVIOUS = -1
+    NEXT = 1
+
+
+CYCLE_KEYCODES = {b"92": CycleDirection.PREVIOUS, b"47": CycleDirection.NEXT}
 
 
 def modifiers(value):
@@ -58,14 +66,23 @@ def key_transition(token):
     return report and (report["event"] == b"3" or 57441 <= int(report["key"]) <= 57454)
 
 
-def ctrl_backslash_event(token):
-    """Return the press, repeat or release event for Ctrl+backslash."""
+def cycle_shortcut(token):
+    """Return the CLI cycle direction and keyboard event for a shortcut."""
     if token in (b"\x1c", b"\x1b[27;5;92~"):  # legacy byte or xterm modifyOtherKeys
-        return b"1"
+        return CycleDirection.PREVIOUS, b"1"
+    if token in (b"\x1f", b"\x1b[27;5;47~"):
+        return CycleDirection.NEXT, b"1"
     report = CSI_U.fullmatch(token)
-    if report and b"92" in (report["key"], report["base"]) and modifiers(report["mods"]) == 4:
-        return report["event"] or b"1"
-    return None
+    if report and modifiers(report["mods"]) == 4:
+        direction = CYCLE_KEYCODES.get(report["key"]) or CYCLE_KEYCODES.get(report["base"])
+        if direction is not None:
+            return direction, report["event"] or b"1"
+
+
+@dataclass(frozen=True)
+class CycleKey:
+    direction: CycleDirection
+    raw: bytes
 
 
 @dataclass(frozen=True)
@@ -119,12 +136,13 @@ class Keys:
 
     def stroke(self, token, code):
         if self.switching and not self.selecting:
-            event = ctrl_backslash_event(token)
-            if event is not None:
+            shortcut = cycle_shortcut(token)
+            if shortcut is not None:
+                direction, event = shortcut
                 if event == b"1":
                     yield from self.literal_space()
                     self.after_space = False
-                    yield PREVIOUS_CLI
+                    yield CycleKey(direction, token)
                 return
         if self.switch_prefix and not self.selecting:
             if self.after_space and code == ord("\\"):
@@ -152,7 +170,7 @@ class Keys:
 
     def is_user_input(self, token):
         """True for an edit, keypress or picker request that ends a shortcut cycle."""
-        if token is PREVIOUS_CLI or self.in_control_string:
+        if isinstance(token, CycleKey) or self.in_control_string:
             return False
         if not isinstance(token, bytes):  # picker request or switch prefix
             return True

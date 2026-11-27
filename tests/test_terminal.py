@@ -48,12 +48,15 @@ class TerminalTests(unittest.TestCase):
                 w.children = {"codex": codex, "claude": Child(3, 9, Screen(), eof=True), "agy": w.active}
                 w.switch()
                 self.assertIs(w.active, codex)
-                for token in w.terminal.keys.feed(opener + b"\x1c\x1b[35::92;5u"):
+                for token in w.terminal.keys.feed(b"\x1f"):
+                    w.input(token)
+                self.assertIs(w.active, w.children["agy"])
+                for token in w.terminal.keys.feed(opener + b"\x1c\x1b[35::92;5u\x1f\x1b[35::47;5u"):
                     w.input(token)
                 self.assertIsNotNone(w.terminal.picker)
                 self.assertFalse(w.cycle_order)
-                self.assertIs(w.active, codex)
-                self.assertFalse(codex.input_queue)
+                self.assertIs(w.active, w.children["agy"])
+                self.assertFalse(w.active.input_queue)
 
     def test_switch_controls_never_reach_the_original_draft(self):
         prefix = b" \\"

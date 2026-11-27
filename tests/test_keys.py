@@ -1,27 +1,38 @@
 import unittest
 
-from session_ref.keys import DISABLE, ENABLE, END, PREVIOUS_CLI, START, Keys, SwitchPrefix
+from session_ref.keys import DISABLE, ENABLE, END, START, CycleDirection, CycleKey, Keys, SwitchPrefix
 
 
 class KeysTests(unittest.TestCase):
-    def test_ctrl_backslash_at_every_read_boundary(self):
+    def test_cycle_shortcuts_at_every_read_boundary(self):
+        shortcuts = (
+            (CycleDirection.PREVIOUS, b"\x1c", b""),
+            (CycleDirection.PREVIOUS, b"\x1b[27;5;92~", b""),
+            (CycleDirection.PREVIOUS, b"\x1b[92;5u", b""),
+            (CycleDirection.PREVIOUS, b"\x1b[35::92;5u", b"\x1b[35::92;5:2u\x1b[35::92;5:3u"),
+            (CycleDirection.PREVIOUS, b"\x1b[92:124;197:1u", b"\x1b[92;197:2u\x1b[92;197:3u"),
+            (CycleDirection.NEXT, b"\x1f", b""),
+            (CycleDirection.NEXT, b"\x1b[27;5;47~", b""),
+            (CycleDirection.NEXT, b"\x1b[47;5u", b""),
+            (CycleDirection.NEXT, b"\x1b[35::47;5u", b"\x1b[35::47;5:2u\x1b[35::47;5:3u"),
+            (CycleDirection.NEXT, b"\x1b[47:63;197:1u", b"\x1b[47;197:2u\x1b[47;197:3u"),
+        )
         for trigger in (b" #", b" \\"):
-            for key in (b"\x1c", b"\x1b[27;5;92~", b"\x1b[92;5u",
-                        b"\x1b[35::92;5u\x1b[35::92;5:2u\x1b[35::92;5:3u",
-                        b"\x1b[92:124;197:1u\x1b[92;197:2u\x1b[92;197:3u"):
-                data = b"a " + key + b"#"
+            for direction, press, tail in shortcuts:
+                data = b"a " + press + tail + b"#"
                 for cut in range(len(data) + 1):
                     keys = Keys(trigger, switching=True)
                     events = [*keys.feed(data[:cut]), *keys.feed(data[cut:])]
-                    self.assertEqual(events, [b"a", b" ", PREVIOUS_CLI, b"#"])
+                    self.assertEqual(events, [b"a", b" ", CycleKey(direction, press), b"#"], (press, cut))
 
-    def test_ctrl_backslash_is_literal_in_payloads_and_outside_workspace_input(self):
-        shortcut = b"\x1c\x1b[92;5u"
+    def test_cycle_shortcuts_are_literal_in_payloads_and_outside_workspace_input(self):
+        shortcut = b"\x1c\x1b[92;5u\x1f\x1b[47;5u"
         keys = Keys(b" #", switching=True)
         self.assertEqual(b"".join(keys.feed(START + shortcut + END)), shortcut)
-        reply = b"\x1b]label\x1c\x07"
+        reply = b"\x1b]label\x1c\x1f\x07"
         self.assertEqual(b"".join(keys.feed(reply)), reply)
-        others = b"\\\x1b[92u\x1b[92;3u\x1b[92;6u\x1b[35:92;5u\x1b[35::92;6u"
+        others = (b"\\\x1b[92u\x1b[92;3u\x1b[92;6u\x1b[35:92;5u\x1b[35::92;6u"
+                  b"/\x1b[47u\x1b[47;3u\x1b[47;6u\x1b[35:47;5u\x1b[35::47;6u\x1b[95;5u")
         self.assertEqual(b"".join(keys.feed(others)), others)
         keys.selecting = True
         self.assertEqual(b"".join(keys.feed(shortcut)), shortcut)

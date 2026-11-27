@@ -47,7 +47,11 @@ ssh -t user@mac '~/codexProject/session-ref/session-ref run codex'
 
 ## 在同一窗口切换 CLI
 
-在 Mac 本机终端，或从 Windows、macOS 通过 SSH 登录 Mac 时，直接按 `Ctrl+\`（Control 加反斜杠）即可回到本窗口上一个使用的 CLI。依次打开 Codex、Claude、agy 后，从 agy 连按三次会经过 Claude、Codex，再回到 agy。如果切到 Claude 后输入或粘贴草稿，下一次按就回到刚离开的 agy。打开选择器或按名称切换也会重新计算顺序。只有一个端时会停在原处。
+在本机终端或 SSH 窗口中，按 `Ctrl+\` 切到上一个 CLI，按 `Ctrl+/` 沿同一顺序切到下一个。比如依次打开 Codex、Claude、agy 后，从 agy 按 `Ctrl+/` 会绕回 Codex，再按一次到 Claude。此时按 `Ctrl+\` 就回到 Codex。只有一个 CLI 时，两个键都会停在原处。
+
+输入或粘贴草稿、打开选择器或按名称切换后，下次切换会按最近使用顺序重新开始。
+
+有些终端会把 `Ctrl+/` 和 `Ctrl+_` 发成同一个字节。只有一个可用 CLI 时，这个字节会交给它处理，可用于撤销。有多个可用 CLI 时，两个键都会切到下一个。如果终端能分别上报这两个键，`Ctrl+_` 始终交给当前 CLI。
 
 如果在 Windows 的 VS Code 集成终端里按 `Ctrl+\` 打开了拆分编辑器，可在 `terminal.integrated.commandsToSkipShell` 列表中加入 `"-workbench.action.splitEditor"`，让终端接收这个键。[VS Code 终端快捷键设置](https://code.visualstudio.com/docs/terminal/advanced#_keyboard-shortcuts-and-the-shell)
 

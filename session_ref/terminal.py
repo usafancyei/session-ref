@@ -10,7 +10,8 @@ import time
 import tty
 from dataclasses import dataclass, field
 
-from .keys import DISABLE, ENABLE, PREVIOUS_CLI, START, Keys, SwitchPrefix, key_transition, reported_key
+from .keys import (DISABLE, ENABLE, START, CycleDirection, CycleKey, Keys, SwitchPrefix,
+                   key_transition, reported_key)
 from .picker import SwitchCommand
 from .screen import RESET_FRAME, STRING_END, Screen
 
@@ -94,8 +95,11 @@ class Terminal:
             if fast and isinstance(token, bytes) and (token in (b"\r", b"\n") or reported_key(token) in (10, 13)):
                 return
             self.cancel_until = 0.0
-        if token is PREVIOUS_CLI:
-            self.switch()
+        if isinstance(token, CycleKey):
+            switched = self.switch(direction=token.direction)
+            if not switched and token.raw == b"\x1f":
+                # Legacy terminals also send this byte for Ctrl+_ (undo).
+                self.send(token.raw)
         elif isinstance(token, SwitchPrefix):
             self.show(SwitchCommand(token.raw))
         elif isinstance(self.picker, SwitchCommand):
@@ -263,18 +267,18 @@ class Workspace:
                                  lambda data: self.active.input_queue.extend(data))
         self.terminal.screen = self.active.screen
 
-    def switch(self, source=None):
+    def switch(self, source=None, *, direction=CycleDirection.PREVIOUS):
         if source is None:
             if len(self.children) < 2:
-                return
+                return False
             # Freeze the order across presses while tracking real activations for exit fallback.
             if not self.cycle_order:
                 self.cycle_order = tuple(self.children)
             order = [name for name in self.cycle_order if not self.children[name].eof]
             if len(order) < 2:
-                return
+                return False
             current = next(reversed(self.children))
-            source = order[order.index(current) - 1]
+            source = order[(order.index(current) + direction.value) % len(order)]
         else:
             self.cycle_order = ()
         child = self.children.get(source)
@@ -296,6 +300,7 @@ class Workspace:
         self.children.pop(source, None)
         self.children[source] = child
         self.activate(child)
+        return True
 
     def activate(self, child):
         previous = self.active
